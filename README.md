@@ -28,4 +28,4 @@ No installation is required. Just download NotizRaum and open `index.html` in yo
 
 > **Browser support:** NotizRaum currently supports only Google Chrome and Microsoft Edge browsers. Firefox and Safari are not supported because the app requires the File System Access API.
 
-Use the `DemoProject/` demo folder to try out the app.
+Use the `DemoProject/` demo folder to try out the app or use a <a href="https://patricklangx.github.io/app/NotizRaum/index.html" target="_blank">live demo</a>.
