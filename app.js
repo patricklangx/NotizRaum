@@ -652,7 +652,7 @@ async function handleCreate(event) {
       const createdAt = new Date().toISOString();
       await setNoteMetadata(currentFolder, filename, createdAt, createdAt);
       expandedPaths.add(pathKey(relativePath.slice(0, -1)));
-      await openNote(fileHandle, relativePath, currentFolder);
+      await openNote(fileHandle, relativePath, currentFolder, 'edit');
       await refreshProjects();
     }
     createDialog.close();
@@ -670,13 +670,13 @@ function sanitizeName(value) {
 
 function imageReferencesInMarkdown(markdown) {
   const references = new Map();
-  const imagePattern = /!\[[^\]]*\]\(([^)\s]+)\)/g;
-  for (const match of markdown.matchAll(imagePattern)) {
+  const linkPattern = /!?\[[^\]]*\]\(([^)\s]+)\)/g;
+  for (const match of markdown.matchAll(linkPattern)) {
     const source = match[1];
     for (const directoryName of [IMAGE_DIRECTORY_NAME, ...LEGACY_IMAGE_DIRECTORY_NAMES]) {
       const prefix = `${directoryName}/`;
       if (!source.startsWith(prefix)) continue;
-      const filename = source.slice(prefix.length);
+      const filename = decodeDataFilename(source.slice(prefix.length));
       if (!filename || filename.includes('/') || filename.includes('\\') || filename === '.' || filename === '..') continue;
       if (!references.has(directoryName)) references.set(directoryName, new Set());
       references.get(directoryName).add(filename);
@@ -788,7 +788,7 @@ function selectedFolderPath() {
   return currentFolderPath.length ? currentFolderPath : [currentProject.name];
 }
 
-async function openNote(fileHandle, path, directoryHandle) {
+async function openNote(fileHandle, path, directoryHandle, initialView = 'preview') {
   const file = await fileHandle.getFile();
   const text = await file.text();
   await ensureNoteMetadata(directoryHandle, path.at(-1), file.lastModified);
@@ -803,7 +803,7 @@ async function openNote(fileHandle, path, directoryHandle) {
     modifiedAt: noteMetadata.modifiedAt
   };
   activeNotePath = path;
-  renderEditor(text);
+  renderEditor(text, initialView);
   setBreadcrumb(path);
 }
 
@@ -827,11 +827,59 @@ function renderEmptyWorkspace() {
   document.querySelector('#breadcrumb').textContent = translate('breadcrumbWorkspace');
 }
 
-function renderEditor(markdown) {
+function renderEditor(markdown, initialView = 'preview') {
   revokePreviewObjectUrls();
-  content.innerHTML = `<div class="editor-shell"><div class="editor-heading"><div class="editor-title"><h1>${escapeHtml(activeNote.name)}</h1><p>${escapeHtml(translate('noteFileType'))}<span class="note-timestamps" id="noteTimestamps"></span></p></div><div class="view-toggle" role="tablist" aria-label="${escapeHtml(translate('viewTabsLabel'))}"><button type="button" role="tab" aria-selected="false" data-view="edit">${escapeHtml(translate('editTab'))}</button><button class="selected" role="tab" aria-selected="true" data-view="preview">${escapeHtml(translate('previewTab'))}</button></div></div><div class="editor-area"><textarea class="markdown-editor" aria-label="${escapeHtml(translate('markdownEditorLabel'))}" spellcheck="false" hidden></textarea><article class="markdown-preview"></article></div></div>`;
+  const startInEditMode = initialView === 'edit';
+  content.innerHTML = `
+    <div class="editor-shell">
+      <div class="editor-heading">
+        <div class="editor-title"><h1>${escapeHtml(activeNote.name)}</h1><p>${escapeHtml(translate('noteFileType'))}<span class="note-timestamps" id="noteTimestamps"></span></p></div>
+        <div class="editor-heading-actions">
+          <div class="view-toggle" role="tablist" aria-label="${escapeHtml(translate('viewTabsLabel'))}">
+            <button class="${startInEditMode ? 'selected' : ''}" type="button" role="tab" aria-selected="${startInEditMode}" data-view="edit">${escapeHtml(translate('editTab'))}</button>
+            <button class="${startInEditMode ? '' : 'selected'}" type="button" role="tab" aria-selected="${!startInEditMode}" data-view="preview">${escapeHtml(translate('previewTab'))}</button>
+          </div>
+          <button class="button button-secondary export-pdf-button" type="button"${startInEditMode ? ' hidden' : ''}>${escapeHtml(translate('exportPdfButton'))}</button>
+        </div>
+      </div>
+      <div class="editor-area">
+        <div class="editor-workspace"${startInEditMode ? '' : ' hidden'}>
+          <div class="editor-toolbar" role="toolbar" aria-label="${escapeHtml(translate('formattingToolbar'))}">
+            <button type="button" data-command="bold" title="${escapeHtml(translate('formatBold'))}" aria-label="${escapeHtml(translate('formatBold'))}"><strong>B</strong></button>
+            <button type="button" data-command="italic" title="${escapeHtml(translate('formatItalic'))}" aria-label="${escapeHtml(translate('formatItalic'))}"><em>I</em></button>
+            <button type="button" data-command="strikeThrough" title="${escapeHtml(translate('formatStrike'))}" aria-label="${escapeHtml(translate('formatStrike'))}"><s>S</s></button>
+            <button type="button" data-command="highlight" title="${escapeHtml(translate('formatHighlight'))}" aria-label="${escapeHtml(translate('formatHighlight'))}">H</button>
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            <button type="button" data-command="heading1" title="${escapeHtml(translate('formatHeading1'))}" aria-label="${escapeHtml(translate('formatHeading1'))}">H1</button>
+            <button type="button" data-command="heading2" title="${escapeHtml(translate('formatHeading2'))}" aria-label="${escapeHtml(translate('formatHeading2'))}">H2</button>
+            <button type="button" data-command="heading3" title="${escapeHtml(translate('formatHeading3'))}" aria-label="${escapeHtml(translate('formatHeading3'))}">H3</button>
+            <button type="button" data-command="unorderedList" title="${escapeHtml(translate('formatBullets'))}" aria-label="${escapeHtml(translate('formatBullets'))}">• ≡</button>
+            <button type="button" data-command="orderedList" title="${escapeHtml(translate('formatNumbered'))}" aria-label="${escapeHtml(translate('formatNumbered'))}">1. ≡</button>
+            <button type="button" data-command="checkList" title="${escapeHtml(translate('formatChecklist'))}" aria-label="${escapeHtml(translate('formatChecklist'))}">☑</button>
+            <button type="button" data-command="table" title="${escapeHtml(translate('formatTable'))}" aria-label="${escapeHtml(translate('formatTable'))}"><svg class="toolbar-table-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path d="M2.5 7.5h15M2.5 12h15M7.5 7.5V17M12.5 7.5V17"/></svg></button>
+            <button type="button" data-command="horizontalRule" title="${escapeHtml(translate('formatHorizontalRule'))}" aria-label="${escapeHtml(translate('formatHorizontalRule'))}"><svg class="toolbar-rule-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3 10h14"/></svg></button>
+            <button type="button" data-command="quote" title="${escapeHtml(translate('formatQuote'))}" aria-label="${escapeHtml(translate('formatQuote'))}">❞</button>
+            <button type="button" data-command="link" title="${escapeHtml(translate('formatLink'))}" aria-label="${escapeHtml(translate('formatLink'))}"><svg class="toolbar-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9.5 14.5 14.5 9.5"/><path d="M7.4 16.6 5.6 18.4a4 4 0 0 1-5.7-5.7l5-5a4 4 0 0 1 5.7 0"/><path d="m16.6 7.4 1.8-1.8a4 4 0 1 1 5.7 5.7l-5 5a4 4 0 0 1-5.7 0"/></svg></button>
+            <button type="button" data-command="code" title="${escapeHtml(translate('formatInlineCode'))}" aria-label="${escapeHtml(translate('formatInlineCode'))}">&lt;/&gt;</button>
+            <button type="button" data-command="codeBlock" title="${escapeHtml(translate('formatCodeBlock'))}" aria-label="${escapeHtml(translate('formatCodeBlock'))}">{ }</button>
+            <span class="emoji-picker-anchor">
+              <button type="button" class="emoji-picker-toggle" aria-expanded="false" aria-controls="emojiPicker" title="${escapeHtml(translate('emojiPicker'))}" aria-label="${escapeHtml(translate('emojiPicker'))}">☺</button>
+              <div class="emoji-picker" id="emojiPicker" role="group" aria-label="${escapeHtml(translate('emojiPicker'))}" hidden>${['😀', '😃', '😄', '😁', '😅', '😂', '🥹', '😊', '😍', '🤔', '😎', '🙌', '👏', '👍', '👎', '🙏', '💪', '🎉', '✨', '🔥', '💡', '❤️', '💚', '✅', '❌', '⚠️', '⭐', '🚀', '📝', '📌', '📖', '🔖', '💵', '🗂️', '📅'].map((emoji) => `<button type="button" class="emoji-option" aria-label="${escapeHtml(`${translate('insertEmoji')} ${emoji}`)}" title="${emoji}" data-emoji="${emoji}">${emoji}</button>`).join('')}</div>
+            </span>
+            <button type="button" class="attach-file-button" title="${escapeHtml(translate('attachFile'))}" aria-label="${escapeHtml(translate('attachFile'))}">📎</button>
+            <input class="attachment-file-input" type="file" multiple hidden>
+          </div>
+          <textarea class="markdown-editor" aria-label="${escapeHtml(translate('markdownEditorLabel'))}" spellcheck="false"></textarea>
+        </div>
+        <article class="markdown-preview"${startInEditMode ? ' hidden' : ''}></article>
+      </div>
+    </div>`;
   const editor = content.querySelector('.markdown-editor');
+  const editorWorkspace = content.querySelector('.editor-workspace');
   const preview = content.querySelector('.markdown-preview');
+  const exportPdfButton = content.querySelector('.export-pdf-button');
+  const attachmentButton = content.querySelector('.attach-file-button');
+  const attachmentInput = content.querySelector('.attachment-file-input');
   const note = activeNote;
   renderNoteTimestamps(note);
   editor.value = markdown;
@@ -846,8 +894,10 @@ function renderEditor(markdown) {
     if (!checkbox?.matches('input[data-task-index]')) return;
     if (!preview.contains(checkbox)) return;
     const lines = editor.value.split(/\r?\n/);
-    const lineIndex = Number(checkbox.dataset.taskIndex);
-    const task = lines[lineIndex]?.match(/^(\s*[-*+]\s+\[)[ xX](\]\s+.*)$/);
+    const taskLines = lines.map((line, index) => ({ line, index })).filter(({ line }) => /^\s*[-*+]\s+\[[ xX]\]\s+/.test(line));
+    const taskIndex = Array.from(preview.querySelectorAll('input[data-task-index]')).indexOf(checkbox);
+    const lineIndex = taskLines[taskIndex]?.index;
+    const task = lineIndex === undefined ? null : lines[lineIndex].match(/^(\s*[-*+]\s+\[)[ xX](\]\s+.*)$/);
     if (!task) return;
     lines[lineIndex] = `${task[1]}${checkbox.checked ? 'x' : ' '}${task[2]}`;
     editor.value = lines.join('\n');
@@ -856,6 +906,44 @@ function renderEditor(markdown) {
     saveTimer = setTimeout(() => saveNote(editor.value, note), 450);
   });
   editor.addEventListener('paste', (event) => handleImagePaste(event, editor, note));
+  let attachmentSelection = null;
+  attachmentButton.addEventListener('mousedown', (event) => event.preventDefault());
+  attachmentButton.addEventListener('click', () => {
+    attachmentSelection = { start: editor.selectionStart, end: editor.selectionEnd };
+    attachmentInput.click();
+  });
+  attachmentInput.addEventListener('change', () => {
+    const files = Array.from(attachmentInput.files ?? []);
+    attachmentInput.value = '';
+    if (files.length && attachmentSelection) {
+      void attachFiles(files, editor, note, attachmentSelection);
+    }
+  });
+  const emojiPicker = content.querySelector('.emoji-picker');
+  const emojiPickerToggle = content.querySelector('.emoji-picker-toggle');
+  content.querySelectorAll('.editor-toolbar [data-command]').forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => applyEditorCommand(editor, button.dataset.command));
+  });
+  emojiPickerToggle.addEventListener('mousedown', (event) => event.preventDefault());
+  emojiPickerToggle.addEventListener('click', () => {
+    emojiPicker.hidden = !emojiPicker.hidden;
+    emojiPickerToggle.setAttribute('aria-expanded', String(!emojiPicker.hidden));
+  });
+  emojiPicker.addEventListener('mousedown', (event) => {
+    if (event.target instanceof HTMLButtonElement) event.preventDefault();
+  });
+  emojiPicker.addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest('[data-emoji]') : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    editor.focus();
+    editor.setRangeText(button.dataset.emoji, start, end, 'end');
+    emojiPicker.hidden = true;
+    emojiPickerToggle.setAttribute('aria-expanded', 'false');
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   content.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => {
     const isPreview = button.dataset.view === 'preview';
     content.querySelectorAll('[data-view]').forEach((tab) => {
@@ -863,10 +951,116 @@ function renderEditor(markdown) {
       tab.classList.toggle('selected', selected);
       tab.setAttribute('aria-selected', String(selected));
     });
-    editor.hidden = isPreview;
+    editorWorkspace.hidden = isPreview;
     preview.hidden = !isPreview;
+    exportPdfButton.hidden = !isPreview;
     if (isPreview) void updateMarkdownPreview(preview, editor.value, note);
   }));
+  exportPdfButton.addEventListener('click', async () => {
+    try {
+      await updateMarkdownPreview(preview, editor.value, note);
+      window.print();
+    } catch (error) {
+      showToast(translate('exportPdfFailed', { details: error.message }));
+    }
+  });
+}
+
+function applyEditorCommand(editor, command) {
+  editor.focus();
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const selected = editor.value.slice(start, end);
+  const selectedOrHint = selected || translate('formatSelectionHint');
+  let replacement = selectedOrHint;
+  let selectionStart = start;
+  let selectionEnd = start;
+  let replacementStart = start;
+  let replacementEnd = end;
+  const wrapSelection = (before, after = before) => {
+    const isWrapped = selected.startsWith(before) && selected.endsWith(after) && selected.length >= before.length + after.length;
+    replacement = isWrapped ? selected.slice(before.length, selected.length - after.length) : `${before}${selectedOrHint}${after}`;
+    selectionStart = start + (isWrapped ? 0 : before.length);
+    selectionEnd = selectionStart + (isWrapped ? replacement.length : selectedOrHint.length);
+  };
+  if (command === 'bold') wrapSelection('**');
+  else if (command === 'italic') wrapSelection('*');
+  else if (command === 'strikeThrough') wrapSelection('~~');
+  else if (command === 'highlight') wrapSelection('==');
+  else if (command === 'code') wrapSelection('`');
+  else if (command === 'codeBlock') {
+    const lineStart = editor.value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const nextNewline = editor.value.indexOf('\n', end);
+    const lineEnd = nextNewline === -1 ? editor.value.length : nextNewline;
+    const code = editor.value.slice(lineStart, lineEnd) || translate('formatSelectionHint');
+    replacement = `\`\`\`\n${code}\n\`\`\``;
+    replacementStart = lineStart;
+    replacementEnd = lineEnd;
+    selectionStart = lineStart + 4;
+    selectionEnd = selectionStart + code.length;
+  }
+  else if (command === 'table') {
+    const rowCount = getTableDimension(translate('formatTableRowsPrompt'), '3', 2);
+    if (rowCount === null) return;
+    const columnCount = getTableDimension(translate('formatTableColumnsPrompt'), '3', 1);
+    if (columnCount === null) return;
+    const headers = Array.from({ length: columnCount }, (_value, index) => `${translate('tableHeader')} ${index + 1}`);
+    const headerRow = `| ${headers.join(' | ')} |`;
+    const separatorRow = `| ${headers.map(() => '---').join(' | ')} |`;
+    const bodyRows = Array.from({ length: rowCount - 1 }, () => `| ${headers.map(() => translate('tableCell')).join(' | ')} |`);
+    const before = start > 0 && editor.value[start - 1] !== '\n' ? '\n\n' : '';
+    const after = end < editor.value.length && editor.value[end] !== '\n' ? '\n\n' : '';
+    replacement = `${before}${[headerRow, separatorRow, ...bodyRows].join('\n')}${after}`;
+    replacementStart = start;
+    replacementEnd = end;
+    selectionStart = start + before.length + 2;
+    selectionEnd = selectionStart + headers[0].length;
+  }
+  else if (command === 'horizontalRule') {
+    const before = start > 0 && editor.value[start - 1] !== '\n' ? '\n\n' : '';
+    const after = end < editor.value.length && editor.value[end] !== '\n' ? '\n\n' : '';
+    replacement = `${before}---${after}`;
+    replacementStart = start;
+    replacementEnd = end;
+    selectionStart = start + before.length + 3;
+    selectionEnd = selectionStart;
+  }
+  else if (command === 'link') {
+    const url = window.prompt(translate('formatLinkPrompt'), 'https://');
+    if (!url || !/^(https?:\/\/|mailto:)/i.test(url)) return;
+    replacement = `[${selectedOrHint}](${url})`;
+    selectionStart = start + 1;
+    selectionEnd = selectionStart + selectedOrHint.length;
+  } else if (['heading', 'heading1', 'heading2', 'heading3', 'unorderedList', 'orderedList', 'checkList', 'quote'].includes(command)) {
+    const lineStart = editor.value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const nextNewline = editor.value.indexOf('\n', end);
+    const lineEnd = nextNewline === -1 ? editor.value.length : nextNewline;
+    const selectedLines = editor.value.slice(lineStart, lineEnd);
+    const headingLevel = command === 'heading' ? 2 : command.startsWith('heading') ? Number(command.slice(-1)) : 0;
+    const prefix = headingLevel ? `${'#'.repeat(headingLevel)} ` : command === 'unorderedList' ? '- ' : command === 'orderedList' ? '1. ' : command === 'checkList' ? '- [ ] ' : '> ';
+    const pattern = headingLevel ? /^#{1,3} / : command === 'unorderedList' ? /^- (?!\[[ xX]\] )/ : command === 'orderedList' ? /^\d+\. / : command === 'checkList' ? /^- \[[ xX]\] / : /^> /;
+    replacement = selectedLines.split('\n').map((line) => pattern.test(line) ? line.replace(pattern, '') : `${prefix}${line}`).join('\n');
+    replacementStart = lineStart;
+    replacementEnd = lineEnd;
+    selectionStart = lineStart;
+    selectionEnd = lineStart + replacement.length;
+  } else {
+    return;
+  }
+  editor.setRangeText(replacement, replacementStart, replacementEnd, 'select');
+  editor.setSelectionRange(selectionStart, selectionEnd);
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function getTableDimension(message, defaultValue, minimum) {
+  const input = window.prompt(message, defaultValue);
+  if (input === null) return null;
+  const value = Number(input.trim());
+  if (!Number.isInteger(value) || value < minimum || value > 50) {
+    showToast(translate('tableDimensionInvalid', { minimum, maximum: 50 }));
+    return null;
+  }
+  return value;
 }
 
 async function saveNote(text, note = activeNote) {
@@ -1639,7 +1833,43 @@ function renderMarkdown(markdown) {
     const separators = splitTableRow(lines[lineIndex + 1]);
     return headers.length > 0 && headers.length === separators.length && separators.every((cell) => tableAlignment(cell) !== null);
   };
-  const isBlockStart = (line, lineIndex) => isTableStart(lineIndex) || /^(?:\s*```|#{1,6}\s+|\s*[-*_]{3,}\s*$|\s*[-*+]\s+|\s*\d+[.)]\s+|>\s?)/.test(line);
+  const isBlockStart = (line, lineIndex) => isTableStart(lineIndex) || /^(?:\s*```|#{1,6}\s+|\s*[-*_]{3,}\s*$|\s*[-*+•◦]\s+|\s*\d+[.)]\s+|>\s?)/.test(line);
+  const matchListItem = (line) => line.match(/^( *)([-*+•◦]|\d+[.)])\s+(.+)$/);
+  const renderList = (startIndex, indent) => {
+    const firstItem = matchListItem(lines[startIndex]);
+    const ordered = /^\d/.test(firstItem[2]);
+    const tag = ordered ? 'ol' : 'ul';
+    const items = [];
+    let listIndex = startIndex;
+
+    while (listIndex < lines.length) {
+      const item = matchListItem(lines[listIndex]);
+      if (!item || item[1].length !== indent || /^\d/.test(item[2]) !== ordered) break;
+      const sourceIndex = listIndex;
+      let itemContent = item[3];
+      const task = itemContent.match(/^\[([ xX])\]\s+(.+)$/);
+      if (task && !ordered) {
+        itemContent = `<label><input type="checkbox" data-task-index="${sourceIndex}" aria-label="${escapeHtml(task[2])}"${task[1].toLowerCase() === 'x' ? ' checked' : ''}><span>${inlineMarkdown(task[2])}</span></label>`;
+      } else {
+        itemContent = inlineMarkdown(itemContent);
+      }
+      listIndex++;
+
+      let nestedLists = '';
+      while (listIndex < lines.length) {
+        const nestedItem = matchListItem(lines[listIndex]);
+        if (!nestedItem || nestedItem[1].length <= indent) break;
+        const nestedIndent = nestedItem[1].length;
+        const nestedList = renderList(listIndex, nestedIndent);
+        nestedLists += nestedList.html;
+        listIndex = nestedList.nextIndex;
+      }
+
+      const taskClass = task && !ordered ? ' class="task-list-item"' : '';
+      items.push(`<li${taskClass}>${itemContent}${nestedLists}</li>`);
+    }
+    return { html: `<${tag}>${items.join('')}</${tag}>`, nextIndex: listIndex };
+  };
   let index = 0;
   while (index < lines.length) {
     const line = lines[index];
@@ -1693,30 +1923,18 @@ function renderMarkdown(markdown) {
       continue;
     }
 
-    const firstListItem = line.match(/^\s*([-*+]\s+|\d+[.)]\s+)(.+)$/);
+    const firstListItem = matchListItem(line);
     if (firstListItem) {
-      const ordered = /^\d/.test(firstListItem[1]);
-      const type = ordered ? 'ol' : 'ul';
-      const items = [];
-      while (index < lines.length) {
-        const item = lines[index].match(/^\s*([-*+]\s+|\d+[.)]\s+)(.+)$/);
-        if (!item || /^\d/.test(item[1]) !== ordered) break;
-        const task = item[2].match(/^\[([ xX])\]\s+(.+)$/);
-        if (task && !ordered) {
-          items.push(`<li class="task-list-item"><label><input type="checkbox" data-task-index="${index}" aria-label="${escapeHtml(task[2])}"${task[1].toLowerCase() === 'x' ? ' checked' : ''}><span>${inlineMarkdown(task[2])}</span></label></li>`);
-        } else {
-          items.push(`<li>${inlineMarkdown(item[2])}</li>`);
-        }
-        index++;
-      }
-      output.push(`<${type}>${items.join('')}</${type}>`);
+      const list = renderList(index, firstListItem[1].length);
+      output.push(list.html);
+      index = list.nextIndex;
       continue;
     }
 
     const paragraph = [line.trim()];
     index++;
     while (index < lines.length && lines[index].trim() && !isBlockStart(lines[index], index)) paragraph.push(lines[index++].trim());
-    output.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
+    output.push(`<p>${paragraph.map(inlineMarkdown).join('<br>')}</p>`);
   }
   return output.join('\n') || '<p></p>';
 }
@@ -1741,7 +1959,19 @@ function inlineMarkdown(text) {
   safe = safe.replace(/==(.+?)==/g, '<mark>$1</mark>');
   safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/__(.+?)__/g, '<strong>$1</strong>');
   safe = safe.replace(/\*(.+?)\*/g, '<em>$1</em>').replace(/_(.+?)_/g, '<em>$1</em>');
-  safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_match, label, url) => {
+    return protect(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  });
+  safe = safe.replace(/\[([^\]]+)\]\((__data\/[^)\s]+)\)/g, (_match, label, source) => {
+    if (source.split('/').some((part) => part === '.' || part === '..')) return label;
+    return protect(`<a class="local-file-link" data-local-path="${source}" download>${label}</a>`);
+  });
+  safe = safe.replace(/https?:\/\/[^\s<]+/gi, (matchedUrl) => {
+    const trailingPunctuation = matchedUrl.match(/[.,!?;:]+$/)?.[0] ?? '';
+    const url = trailingPunctuation ? matchedUrl.slice(0, -trailingPunctuation.length) : matchedUrl;
+    if (!url) return matchedUrl;
+    return `${protect(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}${trailingPunctuation}`;
+  });
   safe = safe.replace(/\u0000TOKEN(\d+)\u0000/g, (_match, index) => inlineTokens[Number(index)]);
   return safe;
 }
@@ -1799,23 +2029,81 @@ async function storePastedImage(image, note) {
   return `${IMAGE_DIRECTORY_NAME}/${filename}`;
 }
 
+async function attachFiles(files, editor, note, selection) {
+  if (!note?.directoryHandle) {
+    showToast(translate('noteStorageUnavailable'));
+    return;
+  }
+  try {
+    const markdown = [];
+    for (const file of files) {
+      const path = await storeAttachment(file, note);
+      markdown.push(`[📎 ${cleanMarkdownLabel(file.name)}](${path})`);
+    }
+    const before = editor.value.slice(0, selection.start);
+    const after = editor.value.slice(selection.end);
+    const insertion = `${before && !before.endsWith('\n') ? '\n' : ''}${markdown.join('\n')}${after && !after.startsWith('\n') ? '\n' : ''}`;
+    editor.focus();
+    editor.setRangeText(insertion, selection.start, selection.end, 'end');
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    showToast(translate(files.length === 1 ? 'attachmentSavedOne' : 'attachmentSavedMany', { count: files.length, directory: IMAGE_DIRECTORY_NAME }));
+  } catch (error) {
+    showToast(translate('attachmentSaveError', { details: error.message }));
+  }
+}
+
+function cleanMarkdownLabel(value) {
+  return value.replace(/[\x00-\x1f\\[\]]/g, '-');
+}
+
+function encodeDataFilename(filename) {
+  return encodeURIComponent(filename).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function decodeDataFilename(filename) {
+  try {
+    return decodeURIComponent(filename);
+  } catch {
+    return filename;
+  }
+}
+
+async function storeAttachment(file, note) {
+  const directory = await note.directoryHandle.getDirectoryHandle(IMAGE_DIRECTORY_NAME, { create: true });
+  const originalName = sanitizeName(file.name) || 'attachment';
+  const dotIndex = originalName.lastIndexOf('.');
+  const base = (dotIndex > 0 ? originalName.slice(0, dotIndex) : originalName) || 'attachment';
+  const extension = dotIndex > 0 ? originalName.slice(dotIndex) : '';
+  let timestamp = Math.floor(Date.now() / 1000);
+  let filename = `${base}-${timestamp}${extension}`;
+  while (await entryExists(directory, filename)) filename = `${base}-${++timestamp}${extension}`;
+  const handle = await directory.getFileHandle(filename, { create: true });
+  await writeFile(handle, file);
+  return `${IMAGE_DIRECTORY_NAME}/${encodeDataFilename(filename)}`;
+}
+
 async function updateMarkdownPreview(preview, markdown, note) {
   revokePreviewObjectUrls();
   preview.replaceChildren();
   preview.innerHTML = renderMarkdown(markdown);
-  const images = Array.from(preview.querySelectorAll('img[data-local-path]'));
-  for (const image of images) {
+  await resolveLocalImages(preview, note);
+}
+
+async function resolveLocalImages(container, note) {
+  const localFiles = Array.from(container.querySelectorAll('[data-local-path]'));
+  for (const element of localFiles) {
     try {
       let directory = note.directoryHandle;
-      const parts = image.dataset.localPath.split('/');
+      const parts = element.dataset.localPath.split('/').map(decodeDataFilename);
       for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
       const handle = await directory.getFileHandle(parts.at(-1));
       const objectUrl = URL.createObjectURL(await handle.getFile());
       previewObjectUrls.push(objectUrl);
-      image.src = objectUrl;
-      image.removeAttribute('data-local-path');
+      if (element instanceof HTMLImageElement) element.src = objectUrl;
+      else if (element instanceof HTMLAnchorElement) element.href = objectUrl;
     } catch {
-      image.alt = `${image.alt}${translate('missingImageSuffix')}`;
+      if (element instanceof HTMLImageElement) element.alt = `${element.alt}${translate('missingImageSuffix')}`;
+      else if (element instanceof HTMLAnchorElement) element.textContent += translate('missingImageSuffix');
     }
   }
 }
